@@ -2,278 +2,239 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ローリングボール</title>
+    <title>擬似3Dボールころころ</title>
     <style>
         body {
             margin: 0;
             overflow: hidden;
-            font-family: 'Arial', sans-serif;
             background-color: #87CEEB; /* 空の色 */
-        }
-        #gameCanvas {
-            display: block;
-        }
-        #uiLayer {
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            pointer-events: none;
             display: flex;
-            flex-direction: column;
             justify-content: center;
             align-items: center;
+            height: 100vh;
+            color: white;
+            font-family: Arial, sans-serif;
+        }
+        canvas {
+            background-color: #00cccc; /* 床の色 */
+            border: 4px solid #fff;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+            cursor: none; /* マウスカーソルを消す */
+        }
+        #ui {
+            position: absolute;
             text-align: center;
+            pointer-events: none;
         }
         #scoreBoard {
             position: absolute;
             top: 20px;
             left: 20px;
-            color: white;
             font-size: 24px;
             font-weight: bold;
-            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
-        }
-        #message {
-            color: white;
-            font-size: 48px;
-            font-weight: bold;
-            text-shadow: 2px 2px 8px rgba(0,0,0,0.8);
-            margin-bottom: 20px;
-        }
-        button {
-            pointer-events: auto;
-            padding: 15px 30px;
-            font-size: 24px;
-            font-weight: bold;
-            color: #fff;
-            background-color: #ff4757;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
-            transition: transform 0.1s;
-        }
-        button:active {
-            transform: scale(0.95);
         }
     </style>
-    <!-- Three.jsをCDNから読み込み -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 </head>
 <body>
 
-    <div id="scoreBoard">スコア: <span id="score">0</span></div>
+    <canvas id="gameCanvas" width="480" height="360"></canvas>
     
-    <div id="uiLayer">
-        <div id="message">ローリングボール</div>
-        <button id="startButton">スタート</button>
+    <div id="scoreBoard">SCORE: <span id="score">0</span></div>
+    
+    <div id="ui">
+        <h1 id="message">擬似3D ボールころころ</h1>
+        <p>画面クリックでスタート</p>
     </div>
 
-    <script>
-        // 基本設定
-        let scene, camera, renderer;
-        let ball, ground;
-        let obstacles = [];
-        let isPlaying = false;
-        let score = 0;
-        let speed = 0.4;
-        let ballSpeedX = 0;
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const ui = document.getElementById('ui');
+    const messageEl = document.getElementById('message');
+    const scoreEl = document.getElementById('score');
+
+    // ゲームの状態
+    let isPlaying = false;
+    let score = 0;
+    let frameCount = 0;
+    let gameSpeed = 5;
+
+    // プレイヤー（ボール）
+    const ball = {
+        x: canvas.width / 2,
+        y: canvas.height - 60,
+        radius: 20,
+        color: '#ff4500' // オレンジ色
+    };
+
+    // 障害物
+    const obstacles = [];
+    let obstacleTimer = 0;
+
+    // 遠近法の計算
+    const perspective = {
+        horizonY: 120, // 地平線の高さ
+        vanishingPointX: canvas.width / 2 // 消失点
+    };
+
+    // 初期化
+    function init() {
+        // マウス移動でボールを操作
+        canvas.addEventListener('mousemove', (e) => {
+            if (!isPlaying) return;
+            const rect = canvas.getBoundingClientRect();
+            ball.x = e.clientX - rect.left;
+            
+            // 画面端の制限
+            if (ball.x < ball.radius) ball.x = ball.radius;
+            if (ball.x > canvas.width - ball.radius) ball.x = canvas.width - ball.radius;
+        });
+
+        // クリックでスタート
+        canvas.addEventListener('click', startGame);
+    }
+
+    // 床のグリッドを描画（これで遠近感を出す）
+    function drawGrid() {
+        ctx.strokeStyle = '#00aaaa';
+        ctx.lineWidth = 1;
+
+        // 縦線（消失点に向かう線）
+        const numVerticalLines = 9;
+        for (let i = 0; i <= numVerticalLines; i++) {
+            const xOnBottom = (canvas.width / numVerticalLines) * i;
+            ctx.beginPath();
+            ctx.moveTo(perspective.vanishingPointX, perspective.horizonY);
+            ctx.lineTo(xOnBottom, canvas.height);
+            ctx.stroke();
+        }
+
+        // 横線（地平線から手前に向かう線）
+        const numHorizontalLines = 8;
+        for (let i = 0; i < numHorizontalLines; i++) {
+            // スピードに合わせて線を移動させ、ループさせる
+            let y = perspective.horizonY + ((i * 30 + (frameCount * gameSpeed)) % (canvas.height - perspective.horizonY));
+            if (y > canvas.height) y = perspective.horizonY;
+
+            // 線の太さを手前ほど太くする
+            ctx.lineWidth = (y - perspective.horizonY) / 40;
+
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(canvas.width, y);
+            ctx.stroke();
+        }
+    }
+
+    // プレイヤーのボールを描画
+    function drawBall() {
+        ctx.beginPath();
+        ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
+        ctx.fillStyle = ball.color;
+        ctx.fill();
+        ctx.closePath();
+    }
+
+    // 障害物の生成と描画
+    function updateObstacles() {
+        obstacleTimer++;
         
-        const GAME_WIDTH = 10; // 道の幅
+        // 一定フレームごとに新しい障害物を追加
+        const spawnRate = Math.max(15, 60 - Math.floor(score / 5)); // スコアが上がると生成速度アップ
+        if (obstacleTimer > spawnRate) {
+            const size = Math.random() * 40 + 20; // ランダムな幅
+            obstacles.push({
+                x: Math.random() * (canvas.width - size),
+                y: perspective.horizonY, // 地平線から出現
+                w: size,
+                h: 10,
+                speed: gameSpeed,
+                z: 0 // 奥行き
+            });
+            obstacleTimer = 0;
+        }
 
-        // UI要素
-        const uiLayer = document.getElementById('uiLayer');
-        const messageEl = document.getElementById('message');
-        const startButton = document.getElementById('startButton');
-        const scoreEl = document.getElementById('score');
-
-        // 初期化処理
-        function init() {
-            // シーンの作成
-            scene = new THREE.Scene();
-            scene.fog = new THREE.Fog(0x87CEEB, 10, 50); // 奥行きに霧をかけて空と馴染ませる
-
-            // カメラの作成
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
-            camera.position.set(0, 4, 7); // ボールの後ろ斜め上に配置
-            camera.lookAt(0, 0, -10);
-
-            // レンダラーの作成
-            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.shadowMap.enabled = true;
-            document.body.appendChild(renderer.domElement);
-
-            // 照明の追加
-            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
-            scene.add(ambientLight);
+        // 障害物の移動と描画
+        for (let i = obstacles.length - 1; i >= 0; i--) {
+            const obs = obstacles[i];
+            obs.z += 0.02; // 手前に進むにつれてz値を増やす
             
-            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-            dirLight.position.set(10, 20, 10);
-            dirLight.castShadow = true;
-            scene.add(dirLight);
-
-            // 地面（道）の作成
-            const groundGeo = new THREE.PlaneGeometry(GAME_WIDTH, 200);
-            const groundMat = new THREE.MeshStandardMaterial({ color: 0x555555 });
-            ground = new THREE.Mesh(groundGeo, groundMat);
-            ground.rotation.x = -Math.PI / 2;
-            ground.receiveShadow = true;
-            scene.add(ground);
-
-            // グリッド（スピード感を出すための模様）
-            const gridHelper = new THREE.GridHelper(200, 100, 0x00ff00, 0x00ff00);
-            gridHelper.position.y = 0.01;
-            scene.add(gridHelper);
-
-            // プレイヤー（ボール）の作成
-            const ballGeo = new THREE.SphereGeometry(0.5, 32, 32);
-            const ballMat = new THREE.MeshStandardMaterial({ color: 0xff3333 });
-            ball = new THREE.Mesh(ballGeo, ballMat);
-            ball.position.y = 0.5;
-            ball.castShadow = true;
-            scene.add(ball);
-
-            // リサイズイベント
-            window.addEventListener('resize', onWindowResize, false);
+            // 遠近法による座標とサイズの計算
+            const scale = 1 + obs.z;
+            const drawY = perspective.horizonY + (obs.z * 100);
+            const drawW = obs.w * scale;
+            const drawH = obs.h * scale;
             
-            // キーボード操作
-            window.addEventListener('keydown', onKeyDown);
-            window.addEventListener('keyup', onKeyUp);
-            
-            // タッチ/マウス操作（画面の左右をタップ・クリックで移動）
-            window.addEventListener('pointerdown', onPointerDown);
-            window.addEventListener('pointerup', onPointerUp);
-        }
+            // 消失点からの相対的な位置
+            const relX = obs.x - perspective.vanishingPointX;
+            const drawX = perspective.vanishingPointX + (relX * scale);
 
-        // 障害物の生成
-        function spawnObstacle() {
-            if (!isPlaying) return;
+            // 描画
+            ctx.fillStyle = '#ff0000'; // 赤い壁
+            ctx.fillRect(drawX, drawY, drawW, drawH);
 
-            const size = 1 + Math.random();
-            const obsGeo = new THREE.BoxGeometry(size, size, size);
-            const obsMat = new THREE.MeshStandardMaterial({ color: 0x3399ff });
-            const obstacle = new THREE.Mesh(obsGeo, obsMat);
-            
-            // ランダムなX座標に配置
-            const halfWidth = GAME_WIDTH / 2 - size / 2;
-            obstacle.position.x = (Math.random() * GAME_WIDTH) - (GAME_WIDTH / 2);
-            obstacle.position.y = size / 2;
-            obstacle.position.z = -50; // 奥から迫ってくる
-            
-            obstacle.castShadow = true;
-            obstacle.receiveShadow = true;
-
-            scene.add(obstacle);
-            obstacles.push(obstacle);
-
-            // 徐々に生成間隔を短くする（難易度上昇）
-            let spawnRate = Math.max(500, 1500 - (score * 20));
-            setTimeout(spawnObstacle, spawnRate);
-        }
-
-        // 入力制御
-        function onKeyDown(e) {
-            if (e.key === 'ArrowLeft' || e.key === 'a') ballSpeedX = -0.15;
-            if (e.key === 'ArrowRight' || e.key === 'd') ballSpeedX = 0.15;
-        }
-        function onKeyUp(e) {
-            if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'ArrowRight' || e.key === 'd') ballSpeedX = 0;
-        }
-        function onPointerDown(e) {
-            if (!isPlaying) return;
-            if (e.clientX < window.innerWidth / 2) ballSpeedX = -0.15; // 左半分タップ
-            else ballSpeedX = 0.15; // 右半分タップ
-        }
-        function onPointerUp(e) {
-            ballSpeedX = 0;
-        }
-
-        // リサイズ対応
-        function onWindowResize() {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
-        }
-
-        // ゲームのメインループ
-        function animate() {
-            requestAnimationFrame(animate);
-
-            if (isPlaying) {
-                // ボールの左右移動
-                ball.position.x += ballSpeedX;
-                
-                // ボールが転がるアニメーション
-                ball.rotation.x -= speed;
-                ball.rotation.z -= ballSpeedX * 2;
-
-                // 道からはみ出ないように制限
-                const limit = GAME_WIDTH / 2 - 0.5;
-                if (ball.position.x > limit) ball.position.x = limit;
-                if (ball.position.x < -limit) ball.position.x = -limit;
-
-                // 障害物の移動と衝突判定
-                for (let i = obstacles.length - 1; i >= 0; i--) {
-                    let obs = obstacles[i];
-                    obs.position.z += speed; // プレイヤーに向かってくる
-
-                    // 衝突判定 (簡易的なAABBによる距離判定)
-                    const distX = Math.abs(ball.position.x - obs.position.x);
-                    const distZ = Math.abs(ball.position.z - obs.position.z);
-                    const size = obs.geometry.parameters.width / 2;
-
-                    // ボール半径(0.5)と障害物サイズ(size)が重なったらゲームオーバー
-                    if (distX < size + 0.4 && distZ < size + 0.4) {
-                        gameOver();
-                    }
-
-                    // カメラの後ろに通り過ぎたら削除
-                    if (obs.position.z > 10) {
-                        scene.remove(obs);
-                        obstacles.splice(i, 1);
-                        score += 10;
-                        scoreEl.innerText = score;
-                        speed += 0.002; // 少しずつスピードアップ
-                    }
-                }
+            // 衝突判定
+            if (
+                ball.x > drawX && 
+                ball.x < drawX + drawW &&
+                ball.y > drawY &&
+                ball.y < drawY + drawH
+            ) {
+                gameOver();
             }
 
-            renderer.render(scene, camera);
+            // 画面外に出たら削除
+            if (drawY > canvas.height) {
+                obstacles.splice(i, 1);
+                score++;
+                scoreEl.innerText = score;
+                gameSpeed += 0.1; // 徐々にスピードアップ
+            }
+        }
+    }
+
+    // ゲームオーバー
+    function gameOver() {
+        isPlaying = false;
+        ui.style.display = 'block';
+        messageEl.innerText = "GAME OVER";
+    }
+
+    // ゲーム開始
+    function startGame() {
+        if (isPlaying) return;
+        obstacles.length = 0; // 配列をクリア
+        score = 0;
+        scoreEl.innerText = score;
+        gameSpeed = 5;
+        ball.x = canvas.width / 2;
+        
+        ui.style.display = 'none';
+        isPlaying = true;
+    }
+
+    // メインのゲームループ
+    function gameLoop() {
+        // 画面をクリア
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        frameCount++;
+
+        // 描画
+        drawGrid(); // 床のグリッド
+        drawBall(); // プレイヤー
+        
+        if (isPlaying) {
+            updateObstacles(); // 障害物の更新と描画
         }
 
-        // ゲーム開始
-        function startGame() {
-            // 初期化
-            obstacles.forEach(obs => scene.remove(obs));
-            obstacles = [];
-            score = 0;
-            speed = 0.4;
-            scoreEl.innerText = score;
-            ball.position.set(0, 0.5, 0);
-            
-            uiLayer.style.display = 'none';
-            isPlaying = true;
-            
-            spawnObstacle();
-        }
+        requestAnimationFrame(gameLoop);
+    }
 
-        // ゲームオーバー
-        function gameOver() {
-            isPlaying = false;
-            uiLayer.style.display = 'flex';
-            messageEl.innerText = "GAME OVER";
-            startButton.innerText = "もう一度プレイ";
-        }
+    // 実行開始
+    init();
+    gameLoop();
 
-        startButton.addEventListener('click', startGame);
-
-        // 実行開始
-        init();
-        animate();
-    </script>
+</script>
 </body>
 </html>
